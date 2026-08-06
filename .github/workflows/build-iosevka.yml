@@ -45,7 +45,7 @@ jobs:
           body: |
             Automated Nerd Font patch of prebuilt upstream Iosevka release ${{ needs.check-version.outputs.version }}.
             Source: https://github.com/be5invis/Iosevka
-            Variants: term, aile, etoile
+            Variants: IosevkaTerm, IosevkaAile, IosevkaEtoile
           draft: false
 
   # 3. Matrix job downloading, patching, and uploading its specific variant zip
@@ -56,14 +56,20 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        plan: [term, aile, etoile]
+        include:
+          - plan: term
+            pkg_name: IosevkaTerm
+          - plan: aile
+            pkg_name: IosevkaAile
+          - plan: etoile
+            pkg_name: IosevkaEtoile
     steps:
       - name: Download and extract upstream PkgTTF archive
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
           CLEAN_VERSION="${TAG#v}"
-          PLAN="${{ matrix.plan }}"
-          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PLAN-$CLEAN_VERSION.zip"
+          PKG_NAME="${{ matrix.matrix.pkg_name || matrix.pkg_name }}"
+          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PKG_NAME-$CLEAN_VERSION.zip"
           
           echo "Downloading $URL..."
           curl -sL "$URL" -o package.zip
