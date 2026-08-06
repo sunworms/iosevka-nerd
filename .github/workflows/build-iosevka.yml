@@ -1,4 +1,4 @@
-name: Patch prebuilt Iosevka (all variants) on new release
+name: Patch prebuilt Iosevka (single release, individual zips)
 
 on:
   schedule:
@@ -32,13 +32,6 @@ jobs:
             echo "version=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Keepalive / Refresh repository activity
-        if: needs.check-version.outputs.should_build == 'false'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: workflow keepalive timestamp update"
-          file_pattern: README.md
-
   # 2. Dynamically discover all PkgTTF zip files attached to the upstream release
   discover-plans:
     needs: check-version
@@ -59,7 +52,7 @@ jobs:
           JSON_ARAY=$(echo "$PLANS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "plans=$JSON_ARAY" >> "$GITHUB_OUTPUT"
 
-  # 3. Create the empty GitHub release target
+  # 3. Create the single shared release container first
   create-release:
     needs: [check-version, discover-plans]
     runs-on: ubuntu-latest
@@ -73,7 +66,7 @@ jobs:
             Source: https://github.com/be5invis/Iosevka
           draft: false
 
-  # 4. Matrix job downloading prebuilts instead of compiling
+  # 4. Matrix job downloading, patching, and uploading its specific variant zip
   download-and-patch:
     needs: [check-version, discover-plans, create-release]
     runs-on: ubuntu-latest
@@ -86,14 +79,12 @@ jobs:
       - name: Download and extract upstream PkgTTF archive
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
-          CLEAN_VERSION="${TAG#v}" # Strip 'pkg' or 'v' prefix for the asset filename if present
+          CLEAN_VERSION="${TAG#v}"
           PLAN="${{ matrix.plan }}"
-          
           URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PLAN-$CLEAN_VERSION.zip"
           
           echo "Downloading $URL..."
           curl -sL "$URL" -o package.zip
-          
           mkdir -p in out
           unzip -q package.zip -d in/
 
@@ -111,8 +102,25 @@ jobs:
           cd out
           zip -r "../PatchedTTF-${{ matrix.plan }}-${{ needs.check-version.outputs.version }}.zip" .
 
-      - name: Attach to the release
-        uses: softprops/action-gh-release@v2
+      - name: Upload individual zip to the shared release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.check-version.outputs.version }}"
+          PLAN="${{ matrix.plan }}"
+          ZIP_NAME="PatchedTTF-$PLAN-$TAG.zip"
+
+          # Use GitHub CLI to safely upload the file to the shared release tag
+          gh release upload "$TAG" "$ZIP_NAME" --repo "${{ github.repository }}" --clobber
+
+  keepalive:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gautamkrishnar/keepalive-workflow@v2
         with:
-          tag_name: ${{ needs.check-version.outputs.version }}
-          files: PatchedTTF-${{ matrix.plan }}-${{ needs.check-version.outputs.version }}.zip
+          use_bot_token: true
