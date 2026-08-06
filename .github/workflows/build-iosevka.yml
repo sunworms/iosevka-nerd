@@ -1,8 +1,8 @@
-name: Patch prebuilt Iosevka (Term, Aile and Etoile)
+name: Patch prebuilt Iosevka (Term)
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '15 6 * * *'
   workflow_dispatch: {}
 
 jobs:
@@ -15,8 +15,15 @@ jobs:
     steps:
       - name: Get latest upstream Iosevka release
         id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(curl -sL https://api.github.com/repos/be5invis/Iosevka/releases/latest | jq -r .tag_name)
+          TAG=$(curl -sL --max-time 15 -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/be5invis/Iosevka/releases/latest | jq -r .tag_name)
+          
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "Error: Failed to fetch upstream tag or API timed out."
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Check whether we already published it
@@ -41,40 +48,28 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-version.outputs.version }}
-          name: Iosevka Nerd Font ${{ needs.check-version.outputs.version }}
+          name: Iosevka Nerd Font Term ${{ needs.check-version.outputs.version }}
           body: |
-            Automated Nerd Font patch of prebuilt upstream Iosevka release ${{ needs.check-version.outputs.version }}.
+            Automated Nerd Font patch of prebuilt upstream Iosevka Term release ${{ needs.check-version.outputs.version }}.
             Source: https://github.com/be5invis/Iosevka
-            Variants: IosevkaTerm, IosevkaAile, IosevkaEtoile
+            Variant: IosevkaTerm
           draft: false
 
-  # 3. Matrix job downloading, patching, and uploading its specific variant artifact
+  # 3. Download, patch, and upload the Term variant artifact
   download-and-patch:
     needs: [check-version, create-release]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        include:
-          - plan: term
-            pkg_name: IosevkaTerm
-          - plan: aile
-            pkg_name: IosevkaAile
-          - plan: etoile
-            pkg_name: IosevkaEtoile
     steps:
       - name: Download and extract upstream PkgTTF archive
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
           CLEAN_VERSION="${TAG#v}"
-          PKG_NAME="${{ matrix.pkg_name }}"
-          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PKG_NAME-$CLEAN_VERSION.zip"
+          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-IosevkaTerm-$CLEAN_VERSION.zip"
           
           echo "Downloading $URL..."
           curl -sL "$URL" -o package.zip
           mkdir -p in out
-          unzip -q package.zip -d in/
+          unpack -q package.zip -d in/ || unzip -q package.zip -d in/
 
       - name: Patch with Nerd Fonts
         run: |
@@ -83,36 +78,35 @@ jobs:
             -v "${{ github.workspace }}/out":/out \
             -e "PN=2" \
             nerdfonts/patcher \
-            --complete --careful --quiet --no-progressbars
+            --complete --careful --quiet --no-progressbars --mono
 
       - name: Upload variant artifact
         uses: actions/upload-artifact@v4
         with:
-          name: patched-font-${{ matrix.plan }}
+          name: patched-font-term
           path: out/
 
-  # 4. Combine all variants into a single zip and upload to release
+  # 4. Package and release the single zip file
   package-and-release:
     needs: [check-version, create-release, download-and-patch]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all variant artifacts
+      - name: Download variant artifact
         uses: actions/download-artifact@v4
         with:
+          name: patched-font-term
           path: combined-fonts
-          pattern: patched-font-*
-          merge-multiple: true
 
-      - name: Create single combined zip
+      - name: Create single zip
         run: |
           cd combined-fonts
-          zip -r "../IosevkaNerdFonts-${{ needs.check-version.outputs.version }}.zip" .
+          zip -r "../IosevkaTermNerdFont-${{ needs.check-version.outputs.version }}.zip" .
 
-      - name: Upload combined zip to the release
+      - name: Upload zip to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
-          ZIP_NAME="IosevkaNerdFonts-$TAG.zip"
+          ZIP_NAME="IosevkaTermNerdFont-$TAG.zip"
 
           gh release upload "$TAG" "$ZIP_NAME" --repo "${{ github.repository }}" --clobber
