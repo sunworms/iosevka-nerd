@@ -1,4 +1,4 @@
-name: Build patched Iosevka (all variants) on new release
+name: Patch prebuilt Iosevka (all variants) on new release
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  # 1. Has upstream published a version we haven't built yet?
+  # 1. Check if upstream has a release we haven't processed yet
   check-version:
     runs-on: ubuntu-latest
     outputs:
@@ -32,9 +32,7 @@ jobs:
             echo "version=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
-  # 2. Read build-plans.toml from that tag, list every plan name.
-  #    This is what makes the matrix "all variants" instead of a
-  #    hardcoded list — it stays correct even if upstream adds plans.
+  # 2. Dynamically discover all PkgTTF zip files attached to the upstream release
   discover-plans:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
@@ -42,32 +40,21 @@ jobs:
     outputs:
       plans: ${{ steps.list.outputs.plans }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: be5invis/Iosevka
-          ref: ${{ needs.check-version.outputs.version }}
-          sparse-checkout: build-plans.toml
-          sparse-checkout-cone-mode: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '26'
-
-      - run: npm install @iarna/toml --no-save
-
-      - name: Extract plan names as a JSON array
+      - name: Fetch asset list and extract plan names
         id: list
         run: |
-          PLANS=$(node -e "
-            const toml = require('@iarna/toml');
-            const fs = require('fs');
-            const doc = toml.parse(fs.readFileSync('build-plans.toml','utf8'));
-            console.log(JSON.stringify(Object.keys(doc.buildPlans)));
-          ")
-          echo "plans=$PLANS" >> "$GITHUB_OUTPUT"
+          TAG="${{ needs.check-version.outputs.version }}"
+          # Query GitHub API for release assets, find PkgTTF-*.zip, and extract the plan variant name
+          PLANS=$(curl -sL "https://api.github.com/repos/be5invis/Iosevka/releases/tags/$TAG" | \
+            jq -r '.assets[].name' | \
+            grep '^PkgTTF-.*\.zip$' | \
+            sed -E 's/^PkgTTF-(.*)-[0-9]+\.[0-9]+\.[0-9]+.*\.zip$/\1/')
+          
+          # Convert newline-separated list into a JSON array for the matrix
+          JSON_ARAY=$(echo "$PLANS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "plans=$JSON_ARAY" >> "$GITHUB_OUTPUT"
 
-  # 3. Create the (empty) release once, so all matrix jobs can attach
-  #    their assets to the same release without racing to create it.
+  # 3. Create the empty GitHub release target
   create-release:
     needs: [check-version, discover-plans]
     runs-on: ubuntu-latest
@@ -77,63 +64,33 @@ jobs:
           tag_name: ${{ needs.check-version.outputs.version }}
           name: Iosevka Nerd Font ${{ needs.check-version.outputs.version }}
           body: |
-            Automated full-variant build of Iosevka, patched with Nerd Fonts.
-            Tracks upstream release ${{ needs.check-version.outputs.version }}
-            of https://github.com/be5invis/Iosevka.
+            Automated Nerd Font patch of prebuilt upstream Iosevka release ${{ needs.check-version.outputs.version }}.
+            Source: https://github.com/be5invis/Iosevka
           draft: false
 
-  # 4. One job per plan. Each job's memory footprint is bounded to a
-  #    single plan regardless of how many plans exist in total — that's
-  #    what avoids the OOM.
-  build-and-patch:
+  # 4. Matrix job downloading prebuilts instead of compiling
+  download-and-patch:
     needs: [check-version, discover-plans, create-release]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 10   # be polite to shared runner capacity; tune as needed
+      max-parallel: 10
       matrix:
         plan: ${{ fromJson(needs.discover-plans.outputs.plans) }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: be5invis/Iosevka
-          ref: ${{ needs.check-version.outputs.version }}
-          path: iosevka-src
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '26'
-
-      - name: Install system dependencies
-        working-directory: iosevka-src
+      - name: Download and extract upstream PkgTTF archive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ttfautohint libpango1.0-dev libpixman-1-dev
-
-      - name: Install dependencies
-        working-directory: iosevka-src
-        run: npm ci
-
-      - name: Build this plan only
-        working-directory: iosevka-src
-        run: npx verda -f verdafile.mjs --targets="ttf::${{ matrix.plan }}"
-
-      - name: Collect this plan's TTFs
-        run: |
+          TAG="${{ needs.check-version.outputs.version }}"
+          PLAN="${{ matrix.plan }}"
+          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PLAN-$TAG.zip"
+          
+          echo "Downloading $URL..."
+          curl -sL "$URL" -o package.zip
+          
           mkdir -p in out
-          cp iosevka-src/dist/${{ matrix.plan }}/TTF/*.ttf in/ 2>/dev/null || true
-
-      - name: Skip if plan produced nothing (shouldn't normally happen)
-        id: gate
-        run: |
-          if [ -z "$(ls -A in 2>/dev/null)" ]; then
-            echo "empty=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "empty=false" >> "$GITHUB_OUTPUT"
-          fi
+          unzip -q package.zip -d in/
 
       - name: Patch with Nerd Fonts
-        if: steps.gate.outputs.empty == 'false'
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/in":/in \
@@ -142,14 +99,12 @@ jobs:
             nerdfonts/patcher \
             --complete --careful --quiet --no-progressbars
 
-      - name: Zip this plan's patched fonts
-        if: steps.gate.outputs.empty == 'false'
+      - name: Zip patched fonts
         run: |
           cd out
           zip -r "../PatchedTTF-${{ matrix.plan }}-${{ needs.check-version.outputs.version }}.zip" .
 
       - name: Attach to the release
-        if: steps.gate.outputs.empty == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check-version.outputs.version }}
