@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '26'
 
       - run: npm install @iarna/toml --no-save
 
@@ -102,7 +102,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '26'
+
+      - name: Install system dependencies
+        working-directory: iosevka-src
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ttfautohint libpango1.0-dev libpixman-1-dev
 
       - name: Install dependencies
         working-directory: iosevka-src
