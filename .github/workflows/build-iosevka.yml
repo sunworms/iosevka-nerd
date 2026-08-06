@@ -1,4 +1,4 @@
-name: Patch prebuilt Iosevka (single release, individual zips)
+name: Patch prebuilt Iosevka (Term, Aile and Etoile)
 
 on:
   schedule:
@@ -48,7 +48,7 @@ jobs:
             Variants: IosevkaTerm, IosevkaAile, IosevkaEtoile
           draft: false
 
-  # 3. Matrix job downloading, patching, and uploading its specific variant zip
+  # 3. Matrix job downloading, patching, and uploading its specific variant artifact
   download-and-patch:
     needs: [check-version, create-release]
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
           CLEAN_VERSION="${TAG#v}"
-          PKG_NAME="${{ matrix.matrix.pkg_name || matrix.pkg_name }}"
+          PKG_NAME="${{ matrix.pkg_name }}"
           URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PKG_NAME-$CLEAN_VERSION.zip"
           
           echo "Downloading $URL..."
@@ -85,18 +85,34 @@ jobs:
             nerdfonts/patcher \
             --complete --careful --quiet --no-progressbars
 
-      - name: Zip patched fonts
-        run: |
-          cd out
-          zip -r "../PatchedTTF-${{ matrix.plan }}-${{ needs.check-version.outputs.version }}.zip" .
+      - name: Upload variant artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-font-${{ matrix.plan }}
+          path: out/
 
-      - name: Upload individual zip to the shared release
+  # 4. Combine all variants into a single zip and upload to release
+  package-and-release:
+    needs: [check-version, create-release, download-and-patch]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all variant artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: combined-fonts
+          pattern: patched-font-*
+          merge-multiple: true
+
+      - name: Create single combined zip
+        run: |
+          cd combined-fonts
+          zip -r "../IosevkaNerdFonts-${{ needs.check-version.outputs.version }}.zip" .
+
+      - name: Upload combined zip to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
-          PLAN="${{ matrix.plan }}"
-          ZIP_NAME="PatchedTTF-$PLAN-$TAG.zip"
+          ZIP_NAME="IosevkaNerdFonts-$TAG.zip"
 
-          # Use GitHub CLI to safely upload the file to the shared release tag
           gh release upload "$TAG" "$ZIP_NAME" --repo "${{ github.repository }}" --clobber
