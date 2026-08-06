@@ -1,0 +1,150 @@
+name: Build patched Iosevka (all variants) on new release
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  # 1. Has upstream published a version we haven't built yet?
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Get latest upstream Iosevka release
+        id: upstream
+        run: |
+          TAG=$(curl -sL https://api.github.com/repos/be5invis/Iosevka/releases/latest | jq -r .tag_name)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether we already published it
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 2. Read build-plans.toml from that tag, list every plan name.
+  #    This is what makes the matrix "all variants" instead of a
+  #    hardcoded list — it stays correct even if upstream adds plans.
+  discover-plans:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      plans: ${{ steps.list.outputs.plans }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: be5invis/Iosevka
+          ref: ${{ needs.check-version.outputs.version }}
+          sparse-checkout: build-plans.toml
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm install @iarna/toml --no-save
+
+      - name: Extract plan names as a JSON array
+        id: list
+        run: |
+          PLANS=$(node -e "
+            const toml = require('@iarna/toml');
+            const fs = require('fs');
+            const doc = toml.parse(fs.readFileSync('build-plans.toml','utf8'));
+            console.log(JSON.stringify(Object.keys(doc.buildPlans)));
+          ")
+          echo "plans=$PLANS" >> "$GITHUB_OUTPUT"
+
+  # 3. Create the (empty) release once, so all matrix jobs can attach
+  #    their assets to the same release without racing to create it.
+  create-release:
+    needs: [check-version, discover-plans]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: Iosevka Nerd Font ${{ needs.check-version.outputs.version }}
+          body: |
+            Automated full-variant build of Iosevka, patched with Nerd Fonts.
+            Tracks upstream release ${{ needs.check-version.outputs.version }}
+            of https://github.com/be5invis/Iosevka.
+          draft: false
+
+  # 4. One job per plan. Each job's memory footprint is bounded to a
+  #    single plan regardless of how many plans exist in total — that's
+  #    what avoids the OOM.
+  build-and-patch:
+    needs: [check-version, discover-plans, create-release]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 10   # be polite to shared runner capacity; tune as needed
+      matrix:
+        plan: ${{ fromJson(needs.discover-plans.outputs.plans) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: be5invis/Iosevka
+          ref: ${{ needs.check-version.outputs.version }}
+          path: iosevka-src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: iosevka-src
+        run: npm ci
+
+      - name: Build this plan only
+        working-directory: iosevka-src
+        run: npx verda -f verdafile.mjs --targets="ttf::${{ matrix.plan }}"
+
+      - name: Collect this plan's TTFs
+        run: |
+          mkdir -p in out
+          cp iosevka-src/dist/${{ matrix.plan }}/TTF/*.ttf in/ 2>/dev/null || true
+
+      - name: Skip if plan produced nothing (shouldn't normally happen)
+        id: gate
+        run: |
+          if [ -z "$(ls -A in 2>/dev/null)" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Patch with Nerd Fonts
+        if: steps.gate.outputs.empty == 'false'
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/in":/in \
+            -v "${{ github.workspace }}/out":/out \
+            -e "PN=2" \
+            nerdfonts/patcher \
+            --complete --careful --quiet --no-progressbars
+
+      - name: Zip this plan's patched fonts
+        if: steps.gate.outputs.empty == 'false'
+        run: |
+          cd out
+          zip -r "../PatchedTTF-${{ matrix.plan }}-${{ needs.check-version.outputs.version }}.zip" .
+
+      - name: Attach to the release
+        if: steps.gate.outputs.empty == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          files: PatchedTTF-${{ matrix.plan }}-${{ needs.check-version.outputs.version }}.zip
