@@ -44,13 +44,11 @@ jobs:
         id: list
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
-          # Query GitHub API for release assets, find PkgTTF-*.zip, and extract the plan variant name
           PLANS=$(curl -sL "https://api.github.com/repos/be5invis/Iosevka/releases/tags/$TAG" | \
             jq -r '.assets[].name' | \
             grep '^PkgTTF-.*\.zip$' | \
             sed -E 's/^PkgTTF-(.*)-[0-9]+\.[0-9]+\.[0-9]+.*\.zip$/\1/')
           
-          # Convert newline-separated list into a JSON array for the matrix
           JSON_ARAY=$(echo "$PLANS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "plans=$JSON_ARAY" >> "$GITHUB_OUTPUT"
 
@@ -81,8 +79,10 @@ jobs:
       - name: Download and extract upstream PkgTTF archive
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
+          CLEAN_VERSION="${TAG#v}" # Strip 'pkg' or 'v' prefix for the asset filename if present
           PLAN="${{ matrix.plan }}"
-          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PLAN-$TAG.zip"
+          
+          URL="https://github.com/be5invis/Iosevka/releases/download/$TAG/PkgTTF-$PLAN-$CLEAN_VERSION.zip"
           
           echo "Downloading $URL..."
           curl -sL "$URL" -o package.zip
