@@ -32,29 +32,10 @@ jobs:
             echo "version=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
-  # 2. Dynamically discover all PkgTTF zip files attached to the upstream release
-  discover-plans:
+  # 2. Create the single shared release container first
+  create-release:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      plans: ${{ steps.list.outputs.plans }}
-    steps:
-      - name: Fetch asset list and extract plan names
-        id: list
-        run: |
-          TAG="${{ needs.check-version.outputs.version }}"
-          PLANS=$(curl -sL "https://api.github.com/repos/be5invis/Iosevka/releases/tags/$TAG" | \
-            jq -r '.assets[].name' | \
-            grep '^PkgTTF-.*\.zip$' | \
-            sed -E 's/^PkgTTF-(.*)-[0-9]+\.[0-9]+\.[0-9]+.*\.zip$/\1/')
-          
-          JSON_ARAY=$(echo "$PLANS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          echo "plans=$JSON_ARAY" >> "$GITHUB_OUTPUT"
-
-  # 3. Create the single shared release container first
-  create-release:
-    needs: [check-version, discover-plans]
     runs-on: ubuntu-latest
     steps:
       - uses: softprops/action-gh-release@v2
@@ -64,17 +45,18 @@ jobs:
           body: |
             Automated Nerd Font patch of prebuilt upstream Iosevka release ${{ needs.check-version.outputs.version }}.
             Source: https://github.com/be5invis/Iosevka
+            Variants: term, aile, etoile
           draft: false
 
-  # 4. Matrix job downloading, patching, and uploading its specific variant zip
+  # 3. Matrix job downloading, patching, and uploading its specific variant zip
   download-and-patch:
-    needs: [check-version, discover-plans, create-release]
+    needs: [check-version, create-release]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 3
       matrix:
-        plan: ${{ fromJson(needs.discover-plans.outputs.plans) }}
+        plan: [term, aile, etoile]
     steps:
       - name: Download and extract upstream PkgTTF archive
         run: |
