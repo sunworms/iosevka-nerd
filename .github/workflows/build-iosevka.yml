@@ -112,15 +112,3 @@ jobs:
 
           # Use GitHub CLI to safely upload the file to the shared release tag
           gh release upload "$TAG" "$ZIP_NAME" --repo "${{ github.repository }}" --clobber
-
-  keepalive:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'false'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: gautamkrishnar/keepalive-workflow@v2
-        with:
-          use_bot_token: true
