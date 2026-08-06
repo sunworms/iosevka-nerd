@@ -8,7 +8,7 @@ on:
 jobs:
   # 1. Check if upstream has a release we haven't processed yet
   check-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
       should_build: ${{ steps.check.outputs.should_build }}
@@ -43,7 +43,7 @@ jobs:
   create-release:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: softprops/action-gh-release@v2
         with:
@@ -58,7 +58,7 @@ jobs:
   # 3. Download, patch, and upload the Term variant artifact
   download-and-patch:
     needs: [check-version, create-release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Download and extract upstream PkgTTF archive
         run: |
@@ -89,7 +89,7 @@ jobs:
   # 4. Package and release the single zip file
   package-and-release:
     needs: [check-version, create-release, download-and-patch]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Download variant artifact
         uses: actions/download-artifact@v4
