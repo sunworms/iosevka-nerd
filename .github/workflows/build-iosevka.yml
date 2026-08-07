@@ -200,7 +200,7 @@ jobs:
 
       - name: Compile Fonts (TTF)
         run: |
-          npm run build -- --jobs 4 contents::aile-lean contents::etoile-lean contents::term-lean
+          npm run build -- --jobs 4 --targets=contents::aile-lean,contents::etoile-lean,contents::term-lean
 
       - name: Prepare build outputs
         run: |
