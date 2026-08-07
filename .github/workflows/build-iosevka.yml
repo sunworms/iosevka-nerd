@@ -9,7 +9,7 @@ jobs:
   check-version:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.check.outputs.version }}
+      version: ${{ steps.upstream.outputs.tag }}
       should_build: ${{ steps.check.outputs.should_build }}
     steps:
       - name: Get latest upstream Iosevka release
@@ -31,28 +31,20 @@ jobs:
         run: |
           TAG="${{ steps.upstream.outputs.tag }}"
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              # Manual runs are allowed to rebuild/clobber an existing release
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+            else
+              # Scheduled runs skip if already published
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "version=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
-  create-release:
+  build-and-patch:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.check-version.outputs.version }}
-          name: Iosevka Lean Variants ${{ needs.check-version.outputs.version }}
-          body: |
-            Custom automated builds of Iosevka Lean variants: Aile Lean, Etoile Lean, and patched Term Lean.
-            Base Tag: ${{ needs.check-version.outputs.version }}
-          draft: false
-
-  build-and-patch:
-    needs: [check-version, create-release]
     runs-on: ubuntu-latest
     steps:
       - name: Clone upstream Iosevka repository
@@ -75,7 +67,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Write out the three custom build configurations into the build file
       - name: Create private-build-plans.toml
         run: |
           cat << 'EOF' > private-build-plans.toml
@@ -207,19 +198,6 @@ jobs:
         run: |
           npm run build -- ttf::aile-lean ttf::etoile-lean ttf::term-lean --jCmd=4
 
-      - name: Prepare build outputs
-        run: |
-          mkdir -p dist/packages
-          
-          # Move Aile and Etoile as-is into separate release staging directories
-          mkdir -p dist/aile dist/etoile
-          cp dist/aile-lean/TTF/*.ttf dist/aile/
-          cp dist/etoile-lean/TTF/*.ttf dist/etoile/
-          
-          # Bundle non-patched fonts into zips
-          cd dist/aile && zip -r ../packages/IosevkaAileLean-${{ needs.check-version.outputs.version }}.zip . && cd ../..
-          cd dist/etoile && zip -r ../packages/IosevkaEtoileLean-${{ needs.check-version.outputs.version }}.zip . && cd ../..
-
       - name: Patch Term Variant with Nerd Fonts
         run: |
           mkdir -p dist/term-patched
@@ -230,14 +208,33 @@ jobs:
             nerdfonts/patcher \
             --complete --careful --quiet --no-progressbars --mono
 
-      - name: Package Patched Term Font
+      - name: Stage all final fonts
         run: |
-          cd dist/term-patched
-          zip -r ../packages/IosevkaTermLeanNerdFont-${{ needs.check-version.outputs.version }}.zip .
+          mkdir -p dist/final
+          cp dist/aile-lean/TTF/*.ttf dist/final/
+          cp dist/etoile-lean/TTF/*.ttf dist/final/
+          cp dist/term-patched/*.ttf dist/final/
 
-      - name: Upload All Archives to Release
+      - name: Package single archive
+        run: |
+          mkdir -p dist/packages
+          cd dist/final
+          zip -r "../packages/Iosevka-Custom-${{ needs.check-version.outputs.version }}.zip" .
+
+      - name: Create or clobber release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.check-version.outputs.version }}"
-          gh release upload "$TAG" dist/packages/*.zip --repo "${{ github.repository }}" --clobber
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG exists — deleting and recreating."
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes --cleanup-tag
+          fi
+
+          gh release create "$TAG" \
+            "dist/packages/Iosevka-Custom-${TAG}.zip" \
+            --repo "${{ github.repository }}" \
+            --title "Iosevka Lean Variants ${TAG}" \
+            --notes "Custom automated builds of Iosevka Lean variants: Aile Lean, Etoile Lean, and patched Term Lean.
+          Base Tag: ${TAG}"
