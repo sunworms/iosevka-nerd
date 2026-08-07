@@ -68,7 +68,6 @@ jobs:
           cache: 'npm'
 
       - name: Install system dependencies
-        working-directory: iosevka-src
         run: |
           sudo apt-get update
           sudo apt-get install -y ttfautohint libpango1.0-dev libpixman-1-dev
