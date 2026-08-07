@@ -213,8 +213,8 @@ jobs:
           
           # Move Aile and Etoile as-is into separate release staging directories
           mkdir -p dist/aile dist/etoile
-          cp dist/aile-lean/ttf/*.ttf dist/aile/
-          cp dist/etoile-lean/ttf/*.ttf dist/etoile/
+          cp dist/aile-lean/TTF/*.ttf dist/aile/
+          cp dist/etoile-lean/TTF/*.ttf dist/etoile/
           
           # Bundle non-patched fonts into zips
           cd dist/aile && zip -r ../packages/IosevkaAileLean-${{ needs.check-version.outputs.version }}.zip . && cd ../..
@@ -224,9 +224,9 @@ jobs:
         run: |
           mkdir -p dist/term-patched
           docker run --rm \
-            -v "${{ github.workspace }}/dist/term-lean/ttf":/in \
+            -v "${{ github.workspace }}/dist/term-lean/TTF":/in \
             -v "${{ github.workspace }}/dist/term-patched":/out \
-            -e "PN=2" \
+            -e "PN=4" \
             nerdfonts/patcher \
             --complete --careful --quiet --no-progressbars --mono
 
